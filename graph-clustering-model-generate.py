@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import copy
 import random
+import math
 
 communities_file = sys.argv[1]
 overlaps_file = sys.argv[2]
@@ -11,10 +12,12 @@ overlaps_file = sys.argv[2]
 with open(communities_file, 'r') as fp:
     communities_raw = fp.readlines()
 
-# create 4-tupel for every community
+# create 3-tupel for every community
 # ( community id | number of members | members of community as set )
 communities = {k: [k, len(communities_raw[k].replace('\n', '').split(' ')),
-                   list(communities_raw[k].replace('\n', '').split(' '))] for k in range(0, len(communities_raw))}
+                   set(communities_raw[k].replace('\n', '').split(' '))] for k in range(0, len(communities_raw))}
+
+number_of_total_matches = sum(community[1] for community in communities.values())
 
 # create members structure (dict)
 # each entry members[some_id] = list( number of memberships | communities in which the member is included)
@@ -62,7 +65,7 @@ communities_stubs = copy.deepcopy(communities)
 # the structure of our original communities
 for community_stub in communities_stubs.items():
     community_stub[1][1] = 0
-    community_stub[1][2] = list()
+    community_stub[1][2] = set()
 
 # set number of memberships to 0, we will increase this number in the matching phase in order to reflect
 # the structure of our original communities
@@ -83,48 +86,6 @@ h_generated = np.zeros((max_community_size + 1, max_overlap + 1))
 
 # print(len(community_adjacency_list))
 
-
-def match_random_member(random_member_key):
-    if members_stubs[random_member_key][0] == members[random_member_key][0]:
-        return False
-
-    random_community_key = random.choice(list(communities.keys()))
-
-
-    # here we try to do the matching, in case we obtain a value abov eof our threshold we reverse the changes
-    # if try_matching_check_h_values(random_member_key, random_community_key):
-
-
-#def try_matching_check_h_values(member_key, community_key):
-
-
-
-# matching algo:
-all_matched = False
-while not all_matched:
-    random_member_key = random.choice(list(members.keys()))
-
-    if not match_random_member(random_member_key):
-        for member_stub in members_stubs:
-            all_matched = members_stubs[random_member_key][0] == members[random_member_key][0]
-            if not all_matched:
-                break
-
-        if not all_matched:
-            continue
-
-        for community_stub in communities_stubs.items():
-            all_matched = community_stub[1][1] == communities_stubs[community_stub[0]][1][1]
-            if not all_matched:
-                break
-
-        if not all_matched:
-            continue
-
-print('all members and communities matched!')
-
-# print graph of generated stubs and save to file
-
 # take random member m
 # check if m already has enough memberships (i.e. members[m][0] == members_stubs[m][0])
 # if yes
@@ -141,15 +102,19 @@ print('all members and communities matched!')
 ### if no
 #### do matching of m and n (i.e. update stubs structures), and update h_generated accordingly
 
+print("number of total matches to be reached: " + str(number_of_total_matches))
+
 
 # alternative version of the algo:
 def random_matching(communities, members, communities_stubs, members_stubs, h, h_generated):
+    number_of_matches = 0
     while True:
         # Choose a random member m
         m = random.choice(list(members_stubs.keys()))
 
         # Check if m already has enough memberships
         if members[m][0] == members_stubs[m][0]:
+            print("matched all communities for member: " + str(m))
             continue
 
         # Choose a random community n
@@ -157,37 +122,128 @@ def random_matching(communities, members, communities_stubs, members_stubs, h, h
 
         # Check if community n already has enough members
         if communities[n][1] == communities_stubs[n][1]:
+            print("matched all members for community: " + str(n))
             continue
 
-        # Check if matching m and n would break the threshold of h(i, j)
-        community_size = communities_stubs[n][1]
-        overlap_size = len(members_stubs[m][1].intersection(communities[n][2]))
+        # Check if matching m and n would break the threshold of h(i, j) for all new overlaps
+        overlapping_communities = members_stubs[m][1]
+        threshold_reached = False
+        for overlapping_community in overlapping_communities:
+            community_size = communities_stubs[n][1]
+            overlap_size = len(communities_stubs[overlapping_community][2]
+                               .intersection((communities_stubs[n][2]).union({m})))
 
-        # TODO: check not only the current overlap, but check all overlaps of the newly added community with the ones
-        # that the member is already a part of (adjacency data structure)
+            # calculate 10% of the value in h, add it to h, and round up to get the threshold
+            threshold = math.floor(h[community_size][overlap_size] * 1.1)
 
-        # TODO: Wenn Overlap zwischen zwei Communities größer wird, dann muss man den Wert von h(i, j) mit overlap - 1
-        # zuerst runterzählen, weil dieser Overlap existiert ja dann eigentlich nicht mehr
-        for community_adj_candidate in members_stubs[m][1]:
-            if h_generated[community_size][overlap_size] + 1 > h[community_size][overlap_size]:
-                continue
+            if h_generated[community_size][overlap_size] + 1 > threshold:
+                threshold_reached = True
 
-        # Do matching of m and n
-        community_adjacency_list[n].append(members_stubs[m][1])
-        # TODO: h_generated hier updaten + Update von adjacency_list Struktur + h_generate von allen neu verbundenen
-        # Communities updaten
+            community_size = communities_stubs[overlapping_community][1]
+
+            if h_generated[community_size][overlap_size] + 1 > threshold:
+                threshold_reached = True
+
+            if threshold_reached:
+                print("reached threshold for community size: " + str(community_size) + " and size of overlap: "
+                      + str(overlap_size))
+                break
+
+        # restart loop from the beginning if the current matching would reach the threshold
+        if threshold_reached:
+            continue
 
         members_stubs[m][0] += 1
         members_stubs[m][1].add(n)
         communities_stubs[n][1] += 1
-        communities_stubs[n][2].append(m)
+        communities_stubs[n][2].add(m)
 
-        # Update h_generated
-        h_generated[community_size][overlap_size] += 1
+        number_of_matches += 1
 
-        # Check for completion
+        if number_of_matches % 10000 == 0:
+            print("reached " + str(number_of_matches) + " matches")
+
+        overlapping_communities = members_stubs[m][1]
+
+        # create entry in communities "adjacency list"
+        for overlapping_community in overlapping_communities:
+            if any(community_adjacency_list_entry[0] == overlapping_community
+                   for community_adjacency_list_entry in community_adjacency_list[n]):
+                if not any(community_adjacency_list_entry[0] == n
+                           for community_adjacency_list_entry in community_adjacency_list[overlapping_community]):
+                    print("ERROR! Symmetry of community adjacency list broken!")
+                    break
+
+                # update community adjacency entries (symmetry)
+                for community_adjacency_list_entry in community_adjacency_list[n]:
+                    if community_adjacency_list_entry[0] == overlapping_community:
+                        community_adjacency_list_entry[1] += 1
+                        # we can exit here since we only have one entry per community
+                        break
+
+                for community_adjacency_list_entry in community_adjacency_list[overlapping_community]:
+                    if community_adjacency_list_entry[0] == n:
+                        community_adjacency_list_entry[1] += 1
+                        # we can exit here since we only have one entry per community
+                        break
+
+                # increase h_generated value but decrease value for previous overlap size
+                community_size = communities_stubs[n][1]
+                overlap_size = len(communities_stubs[overlapping_community][2].intersection(communities_stubs[n][2]))
+
+                h_generated[community_size][overlap_size] += 1
+                h_generated[community_size][overlap_size - 1] -= 1
+
+                community_size = communities_stubs[overlapping_community][1]
+
+                h_generated[community_size][overlap_size] += 1
+                h_generated[community_size][overlap_size - 1] -= 1
+
+                print("did matching between n: " + str(n) + " and m: " + str(m) + " with already existing overlap")
+            else:
+                list_entry = list()
+                list_entry.append(overlapping_community)
+                list_entry.append(len(communities_stubs[overlapping_community][2].intersection(communities_stubs[n][2])))
+                community_adjacency_list[n].append(list_entry)
+
+                # must be symmetric
+                list_entry = list()
+                list_entry.append(n)
+                list_entry.append(len(communities_stubs[overlapping_community][2].intersection(communities_stubs[n][2])))
+                community_adjacency_list[overlapping_community].append(list_entry)
+
+                # increase h_generated value
+                community_size = communities_stubs[n][1]
+                overlap_size = len(communities_stubs[overlapping_community][2].intersection(communities_stubs[n][2]))
+
+                h_generated[community_size][overlap_size] += 1
+
+                community_size = communities_stubs[overlapping_community][1]
+
+                h_generated[community_size][overlap_size] += 1
+
+                # print("did matching between n: " + str(n) + " and m: " + str(m))
+
+        # check for completion
         if all([members_stubs[m][0] == members[m][0] for m in members_stubs]):
             break
 
+
 # Example of calling the function
-# random_matching(communities, members, communities_stubs, members_stubs, h, h_generated)
+random_matching(communities, members, communities_stubs, members_stubs, h, h_generated)
+
+print('all members and communities matched!')
+
+
+def write_h_generated_to_file(h_generated, filename="/home/d3000/d300342/mach2-home/mpicomm/scripts/test/h_generated_output.txt"):
+    with open(filename, 'w') as file:
+        for community_size in range(h_generated.shape[0]):
+            for overlap_size in range(h_generated.shape[1]):
+                number_of_overlaps = h_generated[community_size, overlap_size]
+                if number_of_overlaps > 0:  # optionally, only write non-zero values
+                    file.write(f"{overlap_size}, {community_size}, {int(number_of_overlaps)}\n")
+
+
+write_h_generated_to_file(h_generated)
+
+# TODO: print graph of h_generated
